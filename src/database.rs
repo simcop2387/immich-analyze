@@ -118,7 +118,6 @@ pub async fn fetch_persons_for_asset(
     Ok(persons)
 }
 
-
 /// Fetches all metadata (OCR, Tags, Albums) for a given asset ID.
 pub async fn get_asset_metadata(
     client: &PgClient,
