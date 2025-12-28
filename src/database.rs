@@ -2,7 +2,6 @@ use crate::error::ImageAnalysisError;
 use serde::Serialize;
 use tokio_postgres::Client as PgClient;
 use uuid::Uuid;
-use chrono::NaiveDate;
 
 #[derive(Debug, Serialize)]
 pub struct ImageAnalysisResult {
@@ -15,8 +14,6 @@ pub struct ImageAnalysisResult {
 #[derive(Debug, Serialize)]
 pub struct ImmichPersonResult {
     pub name: String,
-    pub birth_date: Option<String>, // Right type?
-    pub is_favorite: bool, // Useful?
 }
 
 // Any OCR that was found in the image, might be useful for helping smaller local models pull the
@@ -53,16 +50,17 @@ async fn fetch_albums_for_asset(
     asset_id: Uuid,
 ) -> Result<Vec<ImmichAssetAlbum>, ImageAnalysisError> {
     let query = "
-        SELECT a.name, a.description
+        SELECT a.\"albumName\" AS name, a.description
         FROM album_asset aa
         JOIN album a ON aa.\"albumId\" = a.id
-        WHERE aa.\"assetId\" = $1
+        WHERE aa.\"assetId\"::text = $1
     ";
     let asset_id_str = asset_id.to_string();
     let rows = client.query(query, &[&asset_id_str]).await.map_err(|e| {
         eprintln!(
-            "{}",
-            rust_i18n::t!("database.error_fetching_albums", error = e.to_string())
+            "{} {}",
+            rust_i18n::t!("database.error_fetching_albums", error = e.to_string()),
+            e.to_string()
         );
         ImageAnalysisError::DatabaseError {
             error: e.to_string(),
@@ -84,10 +82,10 @@ pub async fn fetch_persons_for_asset(
     asset_id: Uuid,
 ) -> Result<Vec<ImmichPersonResult>, ImageAnalysisError> {
     let query = "
-        SELECT p.name, p.birthDate, p.isFavorite
+        SELECT p.name
         FROM asset_face af
         JOIN person p ON af.\"personId\" = p.id
-        WHERE af.\"assetId\" = $1
+        WHERE af.\"assetId\"::text = $1
     ";
     let asset_id_str = asset_id.to_string();
     let rows = client.query(query, &[&asset_id_str]).await.map_err(|e| {
@@ -103,16 +101,9 @@ pub async fn fetch_persons_for_asset(
     let mut persons = Vec::new();
     for row in rows {
         let name: String = row.get("name");
-        let birth_date: Option<NaiveDate> = NaiveDate::parse_from_str(row.get("birthDate"), "%Y-%m-%d").ok();
-        let is_favorite: bool = row.get("isFavorite");
-
-        // locales for formatting? or is iso8601 going to be better no matter what anyway
-        let birth_date_str = birth_date.map(|date| date.format("%Y-%m-%d").to_string());
 
         persons.push(ImmichPersonResult {
             name,
-            birth_date: birth_date_str,
-            is_favorite,
         });
     }
     Ok(persons)
@@ -151,13 +142,14 @@ async fn fetch_ocr_for_asset(
     let query = "
         SELECT text 
         FROM asset_ocr 
-        WHERE \"assetId\" = $1
+        WHERE \"assetId\"::text = $1
     ";
     let asset_id_str = asset_id.to_string();
     let rows = client.query(query, &[&asset_id_str]).await.map_err(|e| {
         eprintln!(
-            "{}",
-            rust_i18n::t!("database.error_fetching_ocr", error = e.to_string())
+            "{} {}",
+            rust_i18n::t!("database.error_fetching_ocr", error = e.to_string()),
+            e.to_string()
         );
         ImageAnalysisError::DatabaseError {
             error: e.to_string(),
@@ -184,7 +176,7 @@ async fn fetch_tags_for_asset(
         SELECT t.value, t.color
         FROM tag_asset ta
         JOIN tag t ON ta.\"tagId\" = t.id
-        WHERE ta.\"assetId\" = $1
+        WHERE ta.\"assetId\"::text = $1
     ";
     let asset_id_str = asset_id.to_string();
     let rows = client.query(query, &[&asset_id_str]).await.map_err(|e| {

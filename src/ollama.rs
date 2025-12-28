@@ -2,7 +2,7 @@ use crate::{error::ImageAnalysisError, utils::extract_uuid_from_preview_filename
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     io::Read,
@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use handlebars::{Handlebars, Context, RenderContext, Output, Helper, HelperResult};
 
 #[derive(Deserialize, Debug)]
 pub struct ChatResponse {
@@ -82,12 +83,42 @@ pub async fn analyze_image(
         .unwrap_or("unknown")
         .to_string();
     let asset_id = extract_uuid_from_preview_filename(&filename)?;
-    let metadata =
+
+    let mut handlebar = Handlebars::new();
+
+    handlebar.register_helper(
+        "toJSON",
+        Box::new(
+            |h: &Helper,
+             _: &Handlebars,
+             _: &Context,
+             _: &mut RenderContext,
+             out: &mut dyn Output|
+             -> HelperResult {
+                let param = h
+                    .param(0)
+                    .and_then(|v| Some(v.value()))
+                    .ok_or_else(|| {
+                        handlebars::RenderError::new("toJSON: missing parameter")
+                    })?;
+    
+                let json = serde_json::to_string(param)
+                    .map_err(|e| handlebars::RenderError::new(e.to_string()))?;
+    
+                out.write(&json)?;
+                Ok(())
+            },
+        ),
+    );
+
+//    println!("{}", handlebar.render_template("{{toJSON metadata}}", &json!({"metadata": asset_metadata})).unwrap());
+
+    let file_metadata =
         std::fs::metadata(image_path).map_err(|e| ImageAnalysisError::ProcessingError {
             filename: filename.clone(),
             error: e.to_string(),
         })?;
-    if metadata.len() == 0 {
+    if file_metadata.len() == 0 {
         return Err(ImageAnalysisError::EmptyFile { filename });
     }
     let mut image_file =
@@ -108,7 +139,7 @@ pub async fn analyze_image(
         "messages": [
             {
                 "role": "user",
-                "content": prompt,
+                "content": handlebar.render_template(prompt, &json!({"metadata": asset_metadata})).unwrap(),
                 "images": [base64_image]
             }
         ],
