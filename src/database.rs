@@ -45,6 +45,7 @@ pub struct ImmichAssetMetadata {
     pub ocrs: Vec<ImmichAssetOCR>,
     pub tags: Vec<ImmichAssetTags>,
     pub albums: Vec<ImmichAssetAlbum>,
+    pub people: Vec<ImmichPersonResult>,
 }
 
 async fn fetch_albums_for_asset(
@@ -131,11 +132,15 @@ pub async fn get_asset_metadata(
     
     // 3. Fetch albums
     let albums = fetch_albums_for_asset(client, asset_id).await?;
+    
+    // 4. Fetch the people in the image
+    let people = fetch_persons_for_asset(client, asset_id).await?;
 
     Ok(ImmichAssetMetadata {
         ocrs,
         tags,
         albums,
+        people,
     })
 }
 
