@@ -72,6 +72,7 @@ pub async fn analyze_image(
     image_path: &Path,
     model_name: &str,
     prompt: &str,
+    asset_metadata: &crate::database::ImmichAssetMetadata,
     timeout: u64,
     host_manager: &OllamaHostManager,
 ) -> Result<crate::database::ImageAnalysisResult, ImageAnalysisError> {

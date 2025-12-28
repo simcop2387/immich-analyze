@@ -1,6 +1,6 @@
 use crate::{
     config::MonitorConfig,
-    database::update_or_create_asset_description,
+    database::{update_or_create_asset_description, get_asset_metadata},
     error::ImageAnalysisError,
     ollama::{OllamaHostManager, analyze_image},
     utils::{extract_uuid_from_preview_filename, handle_processing_error},
@@ -89,11 +89,13 @@ pub async fn process_new_file(
         config.ollama_hosts.clone(),
         Duration::from_secs(config.unavailable_duration),
     );
+    let asset_metadata = get_asset_metadata(pg_client, asset_id).await?; 
     match analyze_image(
         http_client,
         image_path,
         model_name,
         prompt,
+        &asset_metadata,
         config.request_timeout,
         &host_manager,
     )

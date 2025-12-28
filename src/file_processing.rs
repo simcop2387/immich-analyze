@@ -1,5 +1,5 @@
 use crate::{
-    database::{ImageAnalysisResult, asset_has_description, update_or_create_asset_description},
+    database::{ImageAnalysisResult, asset_has_description, update_or_create_asset_description, get_asset_metadata},
     error::ImageAnalysisError,
     ollama::{OllamaHostManager, analyze_image},
     progress::SimpleProgress,
@@ -144,9 +144,10 @@ async fn process_file(
             .and_then(|n| n.to_str())
             .unwrap_or("unknown"),
     ) {
-        Ok(_asset_id) => {
+        Ok(asset_id) => {
+            let asset_metadata = get_asset_metadata(pg_client, asset_id).await?; 
             let analysis =
-                analyze_image(http_client, path, model_name, prompt, timeout, host_manager).await?;
+                analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, host_manager).await?;
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
                 .await?;
             Ok(analysis)
