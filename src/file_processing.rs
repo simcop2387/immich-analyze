@@ -1,7 +1,9 @@
 use crate::{
+    args::Interface,
     database::{ImageAnalysisResult, asset_has_description, update_or_create_asset_description, get_asset_metadata},
     error::ImageAnalysisError,
-    ollama::{OllamaHostManager, analyze_image},
+    llamacpp::{LlamaCppHostManager, analyze_image as llamacpp_analyze_image},
+    ollama::{OllamaHostManager, analyze_image as ollama_analyze_image},
     progress::SimpleProgress,
     utils::extract_uuid_from_preview_filename,
 };
@@ -107,7 +109,10 @@ async fn process_file_with_existing_check(
     model_name: &str,
     prompt: &str,
     timeout: u64,
-    host_manager: &OllamaHostManager,
+    interface: &Interface,
+    hosts: &[String],
+    api_key: &Option<String>,
+    unavailable_duration: u64,
     debug_prompt: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
     let filename = path
@@ -126,7 +131,10 @@ async fn process_file_with_existing_check(
         model_name,
         prompt,
         timeout,
-        host_manager,
+        interface,
+        hosts,
+        api_key,
+        unavailable_duration,
         debug_prompt,
     )
     .await
@@ -139,7 +147,10 @@ async fn process_file(
     model_name: &str,
     prompt: &str,
     timeout: u64,
-    host_manager: &OllamaHostManager,
+    interface: &Interface,
+    hosts: &[String],
+    api_key: &Option<String>,
+    unavailable_duration: u64,
     debug_prompt: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
     match extract_uuid_from_preview_filename(
@@ -149,8 +160,23 @@ async fn process_file(
     ) {
         Ok(asset_id) => {
             let asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
-            let analysis =
-                analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, host_manager, debug_prompt).await?;
+            let analysis = match interface {
+                Interface::Ollama => {
+                    let host_manager = OllamaHostManager::new(
+                        hosts.to_vec(),
+                        std::time::Duration::from_secs(unavailable_duration),
+                    );
+                    ollama_analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, &host_manager, debug_prompt).await?
+                }
+                Interface::Llamacpp => {
+                    let host_manager = LlamaCppHostManager::new(
+                        hosts.to_vec(),
+                        api_key.clone(),
+                        std::time::Duration::from_secs(unavailable_duration),
+                    );
+                    llamacpp_analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, &host_manager, debug_prompt).await?
+                }
+            };
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
                 .await?;
             Ok(analysis)
@@ -178,10 +204,10 @@ pub async fn process_files_concurrently(
         let debug_prompt = args.debug_prompt;
         let path_clone = path.clone();
         let timeout = args.timeout;
-        let host_manager = OllamaHostManager::new(
-            args.ollama_hosts.clone(),
-            std::time::Duration::from_secs(args.unavailable_duration),
-        );
+        let interface = args.interface.clone();
+        let hosts = args.hosts.clone();
+        let api_key = args.api_key.clone();
+        let unavailable_duration = args.unavailable_duration;
         async move {
             rust_i18n::set_locale(&lang);
             let filename = path_clone
@@ -202,7 +228,10 @@ pub async fn process_files_concurrently(
                     &model_name,
                     &prompt,
                     timeout,
-                    &host_manager,
+                    &interface,
+                    &hosts,
+                    &api_key,
+                    unavailable_duration,
                     debug_prompt,
                 )
                 .await
@@ -214,7 +243,10 @@ pub async fn process_files_concurrently(
                     &model_name,
                     &prompt,
                     timeout,
-                    &host_manager,
+                    &interface,
+                    &hosts,
+                    &api_key,
+                    unavailable_duration,
                     debug_prompt,
                 )
                 .await
