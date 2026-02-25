@@ -160,6 +160,7 @@ async fn run_monitor_mode(
         ignore_existing: args.ignore_existing,
         ollama_hosts: args.ollama_hosts.clone(),
         unavailable_duration: args.unavailable_duration,
+        debug_prompt: args.debug_prompt,
     };
     monitor_folder(
         immich_root,

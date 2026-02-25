@@ -108,6 +108,7 @@ async fn process_file_with_existing_check(
     prompt: &str,
     timeout: u64,
     host_manager: &OllamaHostManager,
+    debug_prompt: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
     let filename = path
         .file_name()
@@ -126,6 +127,7 @@ async fn process_file_with_existing_check(
         prompt,
         timeout,
         host_manager,
+        debug_prompt,
     )
     .await
 }
@@ -138,6 +140,7 @@ async fn process_file(
     prompt: &str,
     timeout: u64,
     host_manager: &OllamaHostManager,
+    debug_prompt: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
     match extract_uuid_from_preview_filename(
         path.file_name()
@@ -145,9 +148,9 @@ async fn process_file(
             .unwrap_or("unknown"),
     ) {
         Ok(asset_id) => {
-            let asset_metadata = get_asset_metadata(pg_client, asset_id).await?; 
+            let asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
             let analysis =
-                analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, host_manager).await?;
+                analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, host_manager, debug_prompt).await?;
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
                 .await?;
             Ok(analysis)
@@ -172,6 +175,7 @@ pub async fn process_files_concurrently(
         let progress = Arc::clone(&progress);
         let lang = locale.to_string();
         let ignore_existing = args.ignore_existing;
+        let debug_prompt = args.debug_prompt;
         let path_clone = path.clone();
         let timeout = args.timeout;
         let host_manager = OllamaHostManager::new(
@@ -199,6 +203,7 @@ pub async fn process_files_concurrently(
                     &prompt,
                     timeout,
                     &host_manager,
+                    debug_prompt,
                 )
                 .await
             } else {
@@ -210,6 +215,7 @@ pub async fn process_files_concurrently(
                     &prompt,
                     timeout,
                     &host_manager,
+                    debug_prompt,
                 )
                 .await
             };

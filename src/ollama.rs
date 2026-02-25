@@ -76,6 +76,7 @@ pub async fn analyze_image(
     asset_metadata: &crate::database::ImmichAssetMetadata,
     timeout: u64,
     host_manager: &OllamaHostManager,
+    debug_prompt: bool,
 ) -> Result<crate::database::ImageAnalysisResult, ImageAnalysisError> {
     let filename = image_path
         .file_name()
@@ -134,12 +135,21 @@ pub async fn analyze_image(
             error: e.to_string(),
         })?;
     let base64_image = STANDARD.encode(&image_data);
+    let rendered_prompt = handlebar
+        .render_template(prompt, &json!({"metadata": asset_metadata}))
+        .unwrap();
+    if debug_prompt {
+        eprintln!("[debug_prompt] file={}", filename);
+        eprintln!("---BEGIN PROMPT---");
+        eprintln!("{}", rendered_prompt);
+        eprintln!("---END PROMPT---");
+    }
     let request_body = serde_json::json!({
         "model": model_name,
         "messages": [
             {
                 "role": "user",
-                "content": handlebar.render_template(prompt, &json!({"metadata": asset_metadata})).unwrap(),
+                "content": rendered_prompt,
                 "images": [base64_image]
             }
         ],
@@ -168,6 +178,12 @@ pub async fn analyze_image(
                                 filename: filename.clone(),
                                 error: e.to_string(),
                             })?;
+                    if debug_prompt {
+                        eprintln!("[debug_prompt] raw response from {}", ollama_url);
+                        eprintln!("---BEGIN RESPONSE---");
+                        eprintln!("{}", response_text);
+                        eprintln!("---END RESPONSE---");
+                    }
                     match serde_json::from_str::<ChatResponse>(&response_text) {
                         Ok(chat_response) => {
                             let description = chat_response.message.content.trim().to_string();
@@ -207,6 +223,12 @@ pub async fn analyze_image(
                 } else {
                     let status = response.status().as_u16();
                     let response_text = response.text().await.unwrap_or_default();
+                    if debug_prompt {
+                        eprintln!("[debug_prompt] HTTP {} error from {}", status, ollama_url);
+                        eprintln!("---BEGIN RESPONSE---");
+                        eprintln!("{}", response_text);
+                        eprintln!("---END RESPONSE---");
+                    }
                     last_error = Some(ImageAnalysisError::HttpError {
                         status,
                         filename: filename.clone(),

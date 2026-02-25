@@ -62,4 +62,7 @@ pub struct Args {
     /// Interface language (ru, en)
     #[arg(long, default_value = "")]
     pub lang: String,
+    /// Print rendered prompt text to console before sending to Ollama
+    #[arg(long)]
+    pub debug_prompt: bool,
 }

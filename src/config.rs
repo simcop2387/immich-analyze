@@ -6,6 +6,7 @@ pub struct FileProcessingConfig {
     pub ollama_hosts: Vec<String>,
     pub unavailable_duration: u64,
     pub request_timeout: u64,
+    pub debug_prompt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -18,4 +19,5 @@ pub struct MonitorConfig {
     pub ignore_existing: bool,
     pub ollama_hosts: Vec<String>,
     pub unavailable_duration: u64,
+    pub debug_prompt: bool,
 }

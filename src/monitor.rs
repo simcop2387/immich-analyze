@@ -89,7 +89,7 @@ pub async fn process_new_file(
         config.ollama_hosts.clone(),
         Duration::from_secs(config.unavailable_duration),
     );
-    let asset_metadata = get_asset_metadata(pg_client, asset_id).await?; 
+    let asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
     match analyze_image(
         http_client,
         image_path,
@@ -98,6 +98,7 @@ pub async fn process_new_file(
         &asset_metadata,
         config.request_timeout,
         &host_manager,
+        config.debug_prompt,
     )
     .await
     {
@@ -258,7 +259,8 @@ pub async fn monitor_folder(
                                                         ignore_existing: config_clone.ignore_existing,
                                                         ollama_hosts: config_clone.ollama_hosts.clone(),
                                                         unavailable_duration: config_clone.unavailable_duration,
-                                                        request_timeout: config_clone.timeout
+                                                        request_timeout: config_clone.timeout,
+                                                        debug_prompt: config_clone.debug_prompt,
                                                     },
                                                 ).await;
                                                 {
