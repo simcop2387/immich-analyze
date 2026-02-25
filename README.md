@@ -141,7 +141,7 @@ nix run github:timasoft/immich-analyze --immich-root /path/to/immich/data --post
 | `IMMICH_ANALYZE_OLLAMA_JWT_TOKEN` | JWT token for Ollama API authentication | `` (empty) |
 | `IMMICH_ANALYZE_MODEL_NAME` | Ollama model to use | `qwen3-vl:4b-thinking-q4_K_M` |
 | `IMMICH_ANALYZE_PROMPT` | Prompt for generating image descriptions | Create a detailed description for the image for proper image search functionality. In the response, provide only the description without introductory words. Also specify the image format (Wallpaper, Screenshot, Drawing, City photo, Selfie, etc.). The format must be correct. If in doubt, name the most likely option and don't think too long. |
-| `IMMICH_ANALYZE_IGNORE_EXISTING` | Ignore existing descriptions | `false` |
+| `IMMICH_ANALYZE_IGNORE_EXISTING` | If true, the program will overwrite existing descriptions | `false` |
 | `IMMICH_ANALYZE_LANG` | Interface language for the application (en, ru) | `en` |
 | `IMMICH_ANALYZE_MAX_CONCURRENT` | Max concurrent requests | `4` |
 | `IMMICH_ANALYZE_UNAVAILABLE_DURATION` | Ollama host availability check interval in seconds | `60` |
@@ -155,7 +155,7 @@ Usage: immich-analyze [OPTIONS]
 Options:
   -m, --monitor                          Enable folder monitoring mode
   -c, --combined                         Enable combined mode: process existing images and monitor for new ones
-  -i, --ignore-existing                  Ignore existing entries in database
+  -i, --ignore-existing                  Overwrite existing descriptions
       --immich-root <IMMICH_ROOT>        Path to Immich root directory (containing upload/, thumbs/ folders) [default: /var/lib/immich]
       --postgres-url <POSTGRES_URL>      PostgreSQL connection string [default: host=localhost user=postgres dbname=immich password=your_password]
       --model-name <MODEL_NAME>          Ollama model name for image analysis [default: qwen3-vl:4b-thinking-q4_K_M]
