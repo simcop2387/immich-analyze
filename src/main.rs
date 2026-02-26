@@ -29,7 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let system_locale = get_system_locale();
     let available_locales = rust_i18n::available_locales!();
-    let args = Args::parse();
+    let mut args = Args::parse();
+    if let Some(ref path) = args.prompt_file {
+        args.prompt = std::fs::read_to_string(path).map_err(|e| {
+            format!("Failed to read prompt file '{}': {}", path.display(), e)
+        })?;
+    }
     let final_locale = determine_locale(&args.lang, &system_locale, &available_locales);
     rust_i18n::set_locale(&final_locale);
     println!(
@@ -61,6 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
     let http_client = create_http_client(&args)?;
+    if args.dry_run {
+        println!("[dry_run] dry run mode enabled — no database writes will occur");
+    }
     if args.combined {
         run_combined_mode(
             immich_root,
@@ -158,6 +166,7 @@ async fn run_monitor_mode(
         api_key: args.api_key.clone(),
         unavailable_duration: args.unavailable_duration,
         debug_prompt: args.debug_prompt,
+        dry_run: args.dry_run,
     };
     monitor_folder(
         immich_root,

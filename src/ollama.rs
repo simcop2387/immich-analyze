@@ -74,6 +74,7 @@ pub async fn analyze_image(
     model_name: &str,
     prompt: &str,
     asset_metadata: &crate::database::ImmichAssetMetadata,
+    user_description: &str,
     timeout: u64,
     host_manager: &OllamaHostManager,
     debug_prompt: bool,
@@ -136,7 +137,7 @@ pub async fn analyze_image(
         })?;
     let base64_image = STANDARD.encode(&image_data);
     let rendered_prompt = handlebar
-        .render_template(prompt, &json!({"metadata": asset_metadata}))
+        .render_template(prompt, &json!({"metadata": asset_metadata, "user_description": user_description}))
         .unwrap();
     if debug_prompt {
         eprintln!("[debug_prompt] file={}", filename);

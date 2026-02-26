@@ -43,6 +43,8 @@ pub struct ImmichAssetMetadata {
     pub tags: Vec<ImmichAssetTags>,
     pub albums: Vec<ImmichAssetAlbum>,
     pub people: Vec<ImmichPersonResult>,
+    /// The AI-generated description from the previous run, if any.
+    pub previous_ai_description: String,
 }
 
 async fn fetch_albums_for_asset(
@@ -131,6 +133,7 @@ pub async fn get_asset_metadata(
         tags,
         albums,
         people,
+        previous_ai_description: String::new(),
     })
 }
 
@@ -199,22 +202,21 @@ async fn fetch_tags_for_asset(
 }
 
 
-/// Check if asset already has description in database
-pub async fn asset_has_description(
+/// Fetch the current description for an asset, if any
+pub async fn get_existing_description(
     client: &PgClient,
     asset_id: Uuid,
-) -> Result<bool, ImageAnalysisError> {
+) -> Result<Option<String>, ImageAnalysisError> {
     let query = "
-        SELECT EXISTS (
-            SELECT 1 FROM asset_exif 
-            WHERE \"assetId\"::text = $1 
-            AND description IS NOT NULL 
-            AND description != ''
-        )
+        SELECT description FROM asset_exif
+        WHERE \"assetId\"::text = $1
+        AND description IS NOT NULL
+        AND description != ''
     ";
     let asset_id_str = asset_id.to_string();
-    match client.query_one(query, &[&asset_id_str]).await {
-        Ok(row) => Ok(row.get(0)),
+    match client.query_opt(query, &[&asset_id_str]).await {
+        Ok(Some(row)) => Ok(Some(row.get("description"))),
+        Ok(None) => Ok(None),
         Err(e) => {
             eprintln!(
                 "{}",

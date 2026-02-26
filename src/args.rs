@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
 pub enum Interface {
@@ -65,13 +66,20 @@ pub struct Args {
             "In the response, provide only the description without introductory words. ",
             "Also specify the image format (Wallpaper, Screenshot, Drawing, City photo, Selfie, etc.). ",
             "The format must be correct. If in doubt, name the most likely option and don't think too long."
-        )
+        ),
+        conflicts_with = "prompt_file"
     )]
     pub prompt: String,
+    /// Path to a file containing the prompt (overrides --prompt)
+    #[arg(long, conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
     /// Interface language (ru, en)
     #[arg(long, default_value = "")]
     pub lang: String,
     /// Print rendered prompt text to console before sending to Ollama
     #[arg(long)]
     pub debug_prompt: bool,
+    /// Run without writing any changes to the database
+    #[arg(long)]
+    pub dry_run: bool,
 }

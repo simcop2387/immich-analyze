@@ -106,6 +106,60 @@ pub fn validate_immich_directory(path: &Path) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+const AI_TAG_OPEN: &str = "[AI]";
+const AI_TAG_CLOSE: &str = "[/AI]";
+
+pub struct ParsedDescription {
+    pub pre_user: String,
+    pub ai_content: String,
+    pub post_user: String,
+}
+
+/// Split an existing description into the user-written parts and the AI block content.
+/// If no [AI] block exists, the whole string is treated as pre_user.
+pub fn parse_description(description: &str) -> ParsedDescription {
+    if let Some(start_idx) = description.find(AI_TAG_OPEN) {
+        let pre_user = description[..start_idx].trim().to_string();
+        let after_open = &description[start_idx + AI_TAG_OPEN.len()..];
+        let (ai_content, post_user) = if let Some(end_idx) = after_open.find(AI_TAG_CLOSE) {
+            (
+                after_open[..end_idx].trim().to_string(),
+                after_open[end_idx + AI_TAG_CLOSE.len()..].trim().to_string(),
+            )
+        } else {
+            (after_open.trim().to_string(), String::new())
+        };
+        ParsedDescription { pre_user, ai_content, post_user }
+    } else {
+        ParsedDescription {
+            pre_user: description.trim().to_string(),
+            ai_content: String::new(),
+            post_user: String::new(),
+        }
+    }
+}
+
+/// Assemble a description from user-written parts and new AI content.
+pub fn build_description(pre_user: &str, ai_content: &str, post_user: &str) -> String {
+    let ai_block = format!("{}\n{}\n{}", AI_TAG_OPEN, ai_content, AI_TAG_CLOSE);
+    match (pre_user.is_empty(), post_user.is_empty()) {
+        (true, true) => ai_block,
+        (false, true) => format!("{}\n{}", pre_user, ai_block),
+        (true, false) => format!("{}\n{}", ai_block, post_user),
+        (false, false) => format!("{}\n{}\n{}", pre_user, ai_block, post_user),
+    }
+}
+
+/// Concatenate the pre and post user description parts for use in the prompt template.
+pub fn join_user_descriptions(pre_user: &str, post_user: &str) -> String {
+    match (pre_user.is_empty(), post_user.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => pre_user.to_string(),
+        (true, false) => post_user.to_string(),
+        (false, false) => format!("{}\n{}", pre_user, post_user),
+    }
+}
+
 pub fn handle_processing_error(error: &ImageAnalysisError, filename: &str) {
     match error {
         ImageAnalysisError::EmptyFile { filename } => {

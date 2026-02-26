@@ -18,8 +18,6 @@ pub enum ImageAnalysisError {
     FileWriteTimeout { timeout: u64, filename: String },
     #[error("Processing error for {filename}: {error}")]
     ProcessingError { filename: String, error: String },
-    #[error("Already processed: {filename}")]
-    AlreadyProcessed { filename: String },
     #[error("Database error: {error}")]
     DatabaseError { error: String },
     #[error("Invalid UUID in filename: {filename}")]

@@ -11,6 +11,7 @@ pub struct FileProcessingConfig {
     pub unavailable_duration: u64,
     pub request_timeout: u64,
     pub debug_prompt: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -26,4 +27,5 @@ pub struct MonitorConfig {
     pub api_key: Option<String>,
     pub unavailable_duration: u64,
     pub debug_prompt: bool,
+    pub dry_run: bool,
 }

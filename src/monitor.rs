@@ -1,11 +1,11 @@
 use crate::{
     args::Interface,
     config::MonitorConfig,
-    database::get_asset_metadata,
+    database::{get_asset_metadata, get_existing_description},
     error::ImageAnalysisError,
     llamacpp::{LlamaCppHostManager, analyze_image as llamacpp_analyze_image},
     ollama::{OllamaHostManager, analyze_image as ollama_analyze_image},
-    utils::extract_uuid_from_preview_filename,
+    utils::{build_description, extract_uuid_from_preview_filename, join_user_descriptions, parse_description},
 };
 use notify::{
     event::ModifyKind,
@@ -78,16 +78,37 @@ pub async fn process_new_file(
         rust_i18n::t!("monitor.file_stable", filename = filename)
     );
     let asset_id = extract_uuid_from_preview_filename(&filename)?;
-    if !config.ignore_existing
-        && crate::database::asset_has_description(pg_client, asset_id).await?
-    {
-        println!(
-            "{}",
-            rust_i18n::t!("monitor.file_already_in_db", filename = filename)
-        );
-        return Ok(());
-    }
-    let asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
+    // Always fetch and parse any existing description for AI context.
+    // With ignore_existing, user text is not preserved in the output but is still provided as context.
+    let (pre_user, previous_ai_description, post_user) = {
+        match get_existing_description(pg_client, asset_id).await? {
+            Some(existing) => {
+                if config.debug_prompt {
+                    eprintln!("[debug_prompt] existing description for {}:", filename);
+                    eprintln!("---BEGIN EXISTING---");
+                    eprintln!("{}", existing);
+                    eprintln!("---END EXISTING---");
+                }
+                let parsed = parse_description(&existing);
+                if config.debug_prompt {
+                    eprintln!("[debug_prompt] parsed pre_user: {:?}", parsed.pre_user);
+                    eprintln!("[debug_prompt] parsed ai_content: {:?}", parsed.ai_content);
+                    eprintln!("[debug_prompt] parsed post_user: {:?}", parsed.post_user);
+                }
+                (parsed.pre_user, parsed.ai_content, parsed.post_user)
+            }
+            None => {
+                if config.debug_prompt {
+                    eprintln!("[debug_prompt] no existing description found for {}", filename);
+                }
+                (String::new(), String::new(), String::new())
+            }
+        }
+    };
+    let user_description = join_user_descriptions(&pre_user, &post_user);
+
+    let mut asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
+    asset_metadata.previous_ai_description = previous_ai_description;
     let result = match config.interface {
         Interface::Ollama => {
             let host_manager = OllamaHostManager::new(
@@ -100,6 +121,7 @@ pub async fn process_new_file(
                 model_name,
                 prompt,
                 &asset_metadata,
+                &user_description,
                 config.request_timeout,
                 &host_manager,
                 config.debug_prompt,
@@ -118,6 +140,7 @@ pub async fn process_new_file(
                 model_name,
                 prompt,
                 &asset_metadata,
+                &user_description,
                 config.request_timeout,
                 &host_manager,
                 config.debug_prompt,
@@ -132,12 +155,24 @@ pub async fn process_new_file(
                 "{}",
                 rust_i18n::t!("monitor.processing_success", filename = filename)
             );
-            crate::database::update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
-                .await?;
-            println!(
-                "{}",
-                rust_i18n::t!("monitor.database_updated", filename = filename)
-            );
+            let description = if config.ignore_existing {
+                build_description("", &analysis.description, "")
+            } else {
+                build_description(&pre_user, &analysis.description, &post_user)
+            };
+            if config.dry_run {
+                eprintln!("[dry_run] would write description for {}:", filename);
+                eprintln!("---BEGIN DRY RUN OUTPUT---");
+                eprintln!("{}", description);
+                eprintln!("---END DRY RUN OUTPUT---");
+            } else {
+                crate::database::update_or_create_asset_description(pg_client, analysis.asset_id, &description)
+                    .await?;
+                println!(
+                    "{}",
+                    rust_i18n::t!("monitor.database_updated", filename = filename)
+                );
+            }
             Ok(())
         }
         Err(e) => {
@@ -289,18 +324,15 @@ pub async fn monitor_folder(
                                                         unavailable_duration: config_clone.unavailable_duration,
                                                         request_timeout: config_clone.timeout,
                                                         debug_prompt: config_clone.debug_prompt,
+                                                        dry_run: config_clone.dry_run,
                                                     },
                                                 ).await;
                                                 {
                                                     let mut files = processing_files_clone.lock().expect("Failed to lock processing files");
                                                     files.remove(&filename_clone);
                                                 }
-                                                if let Err(e) = result {
-                                                    if let ImageAnalysisError::AlreadyProcessed { filename: _ } = e {
-                                                        // Expected when ignoring existing files
-                                                    } else {
-                                                        eprintln!("{}", rust_i18n::t!("error.background_processing_error", filename = filename_clone));
-                                                    }
+                                                if let Err(_e) = result {
+                                                    eprintln!("{}", rust_i18n::t!("error.background_processing_error", filename = filename_clone));
                                                 }
                                             });
                                         }

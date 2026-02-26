@@ -1,6 +1,7 @@
 use crate::{
     args::Interface,
-    database::{ImageAnalysisResult, asset_has_description, update_or_create_asset_description, get_asset_metadata},
+    database::{ImageAnalysisResult, get_existing_description, update_or_create_asset_description, get_asset_metadata},
+    utils::{parse_description, build_description, join_user_descriptions},
     error::ImageAnalysisError,
     llamacpp::{LlamaCppHostManager, analyze_image as llamacpp_analyze_image},
     ollama::{OllamaHostManager, analyze_image as ollama_analyze_image},
@@ -102,6 +103,8 @@ pub fn handle_no_files(
     Ok(())
 }
 
+/// Smart-merge path (no --ignore-existing): fetches any existing description, preserves user
+/// content around the [AI] block, and replaces only the AI portion.
 async fn process_file_with_existing_check(
     http_client: &Client,
     pg_client: &PgClient,
@@ -114,6 +117,7 @@ async fn process_file_with_existing_check(
     api_key: &Option<String>,
     unavailable_duration: u64,
     debug_prompt: bool,
+    dry_run: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
     let filename = path
         .file_name()
@@ -121,25 +125,53 @@ async fn process_file_with_existing_check(
         .unwrap_or("unknown")
         .to_string();
     let asset_id = extract_uuid_from_preview_filename(&filename)?;
-    if asset_has_description(pg_client, asset_id).await? {
-        return Err(ImageAnalysisError::AlreadyProcessed { filename });
+
+    // Parse any existing description so we can preserve user-written content.
+    let (pre_user, previous_ai_description, post_user) = match get_existing_description(pg_client, asset_id).await? {
+        Some(existing) => {
+            if debug_prompt {
+                eprintln!("[debug_prompt] existing description for {}:", filename);
+                eprintln!("---BEGIN EXISTING---");
+                eprintln!("{}", existing);
+                eprintln!("---END EXISTING---");
+            }
+            let parsed = parse_description(&existing);
+            if debug_prompt {
+                eprintln!("[debug_prompt] parsed pre_user: {:?}", parsed.pre_user);
+                eprintln!("[debug_prompt] parsed ai_content: {:?}", parsed.ai_content);
+                eprintln!("[debug_prompt] parsed post_user: {:?}", parsed.post_user);
+            }
+            (parsed.pre_user, parsed.ai_content, parsed.post_user)
+        }
+        None => {
+            if debug_prompt {
+                eprintln!("[debug_prompt] no existing description found for {}", filename);
+            }
+            (String::new(), String::new(), String::new())
+        }
+    };
+    let user_description = join_user_descriptions(&pre_user, &post_user);
+
+    let mut asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
+    asset_metadata.previous_ai_description = previous_ai_description;
+    let analysis = run_analyze(
+        http_client, path, model_name, prompt, &asset_metadata, &user_description,
+        timeout, interface, hosts, api_key, unavailable_duration, debug_prompt,
+    ).await?;
+
+    let merged = build_description(&pre_user, &analysis.description, &post_user);
+    if dry_run {
+        eprintln!("[dry_run] would write description for {}:", filename);
+        eprintln!("---BEGIN DRY RUN OUTPUT---");
+        eprintln!("{}", merged);
+        eprintln!("---END DRY RUN OUTPUT---");
+    } else {
+        update_or_create_asset_description(pg_client, analysis.asset_id, &merged).await?;
     }
-    process_file(
-        http_client,
-        pg_client,
-        path,
-        model_name,
-        prompt,
-        timeout,
-        interface,
-        hosts,
-        api_key,
-        unavailable_duration,
-        debug_prompt,
-    )
-    .await
+    Ok(ImageAnalysisResult { description: merged, asset_id: analysis.asset_id })
 }
 
+/// Overwrite path (--ignore-existing): reads existing data for AI context but overwrites the output.
 async fn process_file(
     http_client: &Client,
     pg_client: &PgClient,
@@ -152,36 +184,90 @@ async fn process_file(
     api_key: &Option<String>,
     unavailable_duration: u64,
     debug_prompt: bool,
+    dry_run: bool,
 ) -> Result<ImageAnalysisResult, ImageAnalysisError> {
-    match extract_uuid_from_preview_filename(
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown"),
-    ) {
-        Ok(asset_id) => {
-            let asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
-            let analysis = match interface {
-                Interface::Ollama => {
-                    let host_manager = OllamaHostManager::new(
-                        hosts.to_vec(),
-                        std::time::Duration::from_secs(unavailable_duration),
-                    );
-                    ollama_analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, &host_manager, debug_prompt).await?
-                }
-                Interface::Llamacpp => {
-                    let host_manager = LlamaCppHostManager::new(
-                        hosts.to_vec(),
-                        api_key.clone(),
-                        std::time::Duration::from_secs(unavailable_duration),
-                    );
-                    llamacpp_analyze_image(http_client, path, model_name, prompt, &asset_metadata, timeout, &host_manager, debug_prompt).await?
-                }
-            };
-            update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
-                .await?;
-            Ok(analysis)
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let asset_id = extract_uuid_from_preview_filename(&filename)?;
+
+    let (user_description, previous_ai_description) = match get_existing_description(pg_client, asset_id).await? {
+        Some(existing) => {
+            if debug_prompt {
+                eprintln!("[debug_prompt] existing description for {}:", filename);
+                eprintln!("---BEGIN EXISTING---");
+                eprintln!("{}", existing);
+                eprintln!("---END EXISTING---");
+            }
+            let parsed = parse_description(&existing);
+            if debug_prompt {
+                eprintln!("[debug_prompt] parsed pre_user: {:?}", parsed.pre_user);
+                eprintln!("[debug_prompt] parsed ai_content: {:?}", parsed.ai_content);
+                eprintln!("[debug_prompt] parsed post_user: {:?}", parsed.post_user);
+            }
+            let user_desc = crate::utils::join_user_descriptions(&parsed.pre_user, &parsed.post_user);
+            (user_desc, parsed.ai_content)
         }
-        Err(e) => Err(e),
+        None => {
+            if debug_prompt {
+                eprintln!("[debug_prompt] no existing description found for {}", filename);
+            }
+            (String::new(), String::new())
+        }
+    };
+
+    let mut asset_metadata = get_asset_metadata(pg_client, asset_id).await?;
+    asset_metadata.previous_ai_description = previous_ai_description;
+    let analysis = run_analyze(
+        http_client, path, model_name, prompt, &asset_metadata, &user_description,
+        timeout, interface, hosts, api_key, unavailable_duration, debug_prompt,
+    ).await?;
+
+    let description = build_description("", &analysis.description, "");
+    if dry_run {
+        eprintln!("[dry_run] would write description for {}:", filename);
+        eprintln!("---BEGIN DRY RUN OUTPUT---");
+        eprintln!("{}", description);
+        eprintln!("---END DRY RUN OUTPUT---");
+    } else {
+        update_or_create_asset_description(pg_client, analysis.asset_id, &description).await?;
+    }
+    Ok(ImageAnalysisResult { description, asset_id: analysis.asset_id })
+}
+
+/// Call the configured AI backend and return the raw description string.
+async fn run_analyze(
+    http_client: &Client,
+    path: &Path,
+    model_name: &str,
+    prompt: &str,
+    asset_metadata: &crate::database::ImmichAssetMetadata,
+    user_description: &str,
+    timeout: u64,
+    interface: &Interface,
+    hosts: &[String],
+    api_key: &Option<String>,
+    unavailable_duration: u64,
+    debug_prompt: bool,
+) -> Result<ImageAnalysisResult, ImageAnalysisError> {
+    match interface {
+        Interface::Ollama => {
+            let host_manager = OllamaHostManager::new(
+                hosts.to_vec(),
+                std::time::Duration::from_secs(unavailable_duration),
+            );
+            ollama_analyze_image(http_client, path, model_name, prompt, asset_metadata, user_description, timeout, &host_manager, debug_prompt).await
+        }
+        Interface::Llamacpp => {
+            let host_manager = LlamaCppHostManager::new(
+                hosts.to_vec(),
+                api_key.clone(),
+                std::time::Duration::from_secs(unavailable_duration),
+            );
+            llamacpp_analyze_image(http_client, path, model_name, prompt, asset_metadata, user_description, timeout, &host_manager, debug_prompt).await
+        }
     }
 }
 
@@ -202,6 +288,7 @@ pub async fn process_files_concurrently(
         let lang = locale.to_string();
         let ignore_existing = args.ignore_existing;
         let debug_prompt = args.debug_prompt;
+        let dry_run = args.dry_run;
         let path_clone = path.clone();
         let timeout = args.timeout;
         let interface = args.interface.clone();
@@ -233,6 +320,7 @@ pub async fn process_files_concurrently(
                     &api_key,
                     unavailable_duration,
                     debug_prompt,
+                    dry_run,
                 )
                 .await
             } else {
@@ -248,6 +336,7 @@ pub async fn process_files_concurrently(
                     &api_key,
                     unavailable_duration,
                     debug_prompt,
+                    dry_run,
                 )
                 .await
             };
@@ -310,16 +399,6 @@ pub fn display_results(
 
 fn handle_error_result(filename: &str, error: &ImageAnalysisError) -> (&'static str, String) {
     match error {
-        ImageAnalysisError::AlreadyProcessed { filename } => (
-            "skipped",
-            format!(
-                "{} [{}] {}\n{}",
-                rust_i18n::t!("status.skipped"),
-                filename,
-                rust_i18n::t!("main.file_already_in_database", filename = filename),
-                "-".repeat(80)
-            ),
-        ),
         ImageAnalysisError::InvalidUuid { filename } => (
             "skipped",
             format!(
