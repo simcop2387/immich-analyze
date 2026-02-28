@@ -10,10 +10,19 @@ pub struct ImageAnalysisResult {
 }
 
 // Grab some data about the persons that are present, this way we can use them to describe the
-// people in the image better.  Maybe someday also include the face data to provide to the VLM?
+// people in the image better.
 #[derive(Debug, Serialize)]
 pub struct ImmichPersonResult {
     pub name: String,
+    pub bounding_box: Option<BoundingBox>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BoundingBox {
+    pub x1: f64, // normalized 0.0–1.0
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
 }
 
 // Any OCR that was found in the image, might be useful for helping smaller local models pull the
@@ -36,6 +45,21 @@ pub struct ImmichAssetAlbum {
     pub description: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ImmichExternalFileInfo {
+    pub original_filename: String,
+    pub original_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImmichAssetLocation {
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub country: Option<String>,
+}
+
 // Final bit to serialize into yaml or json? into the prompt
 #[derive(Debug, Serialize)]
 pub struct ImmichAssetMetadata {
@@ -43,6 +67,8 @@ pub struct ImmichAssetMetadata {
     pub tags: Vec<ImmichAssetTags>,
     pub albums: Vec<ImmichAssetAlbum>,
     pub people: Vec<ImmichPersonResult>,
+    pub location: Option<ImmichAssetLocation>,
+    pub external_file: Option<ImmichExternalFileInfo>,
     /// The AI-generated description from the previous run, if any.
     pub previous_ai_description: String,
 }
@@ -84,10 +110,16 @@ pub async fn fetch_persons_for_asset(
     asset_id: Uuid,
 ) -> Result<Vec<ImmichPersonResult>, ImageAnalysisError> {
     let query = "
-        SELECT p.name
+        SELECT p.name,
+               af.\"imageWidth\", af.\"imageHeight\",
+               af.\"boundingBoxX1\", af.\"boundingBoxY1\",
+               af.\"boundingBoxX2\", af.\"boundingBoxY2\"
         FROM asset_face af
         JOIN person p ON af.\"personId\" = p.id
         WHERE af.\"assetId\"::text = $1
+          AND af.\"deletedAt\" IS NULL
+          AND p.name IS NOT NULL
+          AND p.name != ''
     ";
     let asset_id_str = asset_id.to_string();
     let rows = client.query(query, &[&asset_id_str]).await.map_err(|e| {
@@ -103,12 +135,106 @@ pub async fn fetch_persons_for_asset(
     let mut persons = Vec::new();
     for row in rows {
         let name: String = row.get("name");
+        let image_width: i32 = row.get("imageWidth");
+        let image_height: i32 = row.get("imageHeight");
+        let x1: i32 = row.get("boundingBoxX1");
+        let y1: i32 = row.get("boundingBoxY1");
+        let x2: i32 = row.get("boundingBoxX2");
+        let y2: i32 = row.get("boundingBoxY2");
 
-        persons.push(ImmichPersonResult {
-            name,
-        });
+        let bounding_box = if image_width > 0 && image_height > 0 {
+            Some(BoundingBox {
+                x1: x1 as f64 / image_width as f64,
+                y1: y1 as f64 / image_height as f64,
+                x2: x2 as f64 / image_width as f64,
+                y2: y2 as f64 / image_height as f64,
+            })
+        } else {
+            None
+        };
+
+        persons.push(ImmichPersonResult { name, bounding_box });
     }
     Ok(persons)
+}
+
+/// Fetch location metadata (GPS + city/state/country) for an asset
+async fn fetch_location_for_asset(
+    client: &PgClient,
+    asset_id: Uuid,
+) -> Result<Option<ImmichAssetLocation>, ImageAnalysisError> {
+    let query = "
+        SELECT latitude, longitude, city, state, country
+        FROM asset_exif
+        WHERE \"assetId\"::text = $1
+    ";
+    let asset_id_str = asset_id.to_string();
+    match client.query_opt(query, &[&asset_id_str]).await {
+        Ok(Some(row)) => {
+            let latitude: Option<f64> = row.get("latitude");
+            let longitude: Option<f64> = row.get("longitude");
+            let city: Option<String> = row.get("city");
+            let state: Option<String> = row.get("state");
+            let country: Option<String> = row.get("country");
+            // Return None if all fields are NULL
+            if latitude.is_none()
+                && longitude.is_none()
+                && city.is_none()
+                && state.is_none()
+                && country.is_none()
+            {
+                Ok(None)
+            } else {
+                Ok(Some(ImmichAssetLocation {
+                    latitude,
+                    longitude,
+                    city,
+                    state,
+                    country,
+                }))
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("database.error_fetching_location", error = e.to_string())
+            );
+            Err(ImageAnalysisError::DatabaseError {
+                error: e.to_string(),
+            })
+        }
+    }
+}
+
+/// Returns originalFilename + originalPath for external assets, or None for non-external assets.
+async fn fetch_external_file_info(
+    client: &PgClient,
+    asset_id: Uuid,
+) -> Result<Option<ImmichExternalFileInfo>, ImageAnalysisError> {
+    let query = "
+        SELECT \"originalFileName\", \"originalPath\"
+        FROM asset
+        WHERE id::text = $1
+          AND \"isExternal\" = true
+    ";
+    let asset_id_str = asset_id.to_string();
+    match client.query_opt(query, &[&asset_id_str]).await {
+        Ok(Some(row)) => Ok(Some(ImmichExternalFileInfo {
+            original_filename: row.get("originalFileName"),
+            original_path: row.get("originalPath"),
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("database.error_fetching_external_file", error = e.to_string())
+            );
+            Err(ImageAnalysisError::DatabaseError {
+                error: e.to_string(),
+            })
+        }
+    }
 }
 
 /// Fetches all metadata (OCR, Tags, Albums) for a given asset ID.
@@ -116,23 +242,33 @@ pub async fn get_asset_metadata(
     client: &PgClient,
     asset_id: Uuid,
 ) -> Result<ImmichAssetMetadata, ImageAnalysisError> {
-    // 1. Fetch OCR data
+    eprintln!("[debug] get_asset_metadata: step 1 (ocr) for {}", asset_id);
     let ocrs = fetch_ocr_for_asset(client, asset_id).await?;
-    
-    // 2. Fetch tags
+
+    eprintln!("[debug] get_asset_metadata: step 2 (tags) for {}", asset_id);
     let tags = fetch_tags_for_asset(client, asset_id).await?;
-    
-    // 3. Fetch albums
+
+    eprintln!("[debug] get_asset_metadata: step 3 (albums) for {}", asset_id);
     let albums = fetch_albums_for_asset(client, asset_id).await?;
-    
-    // 4. Fetch the people in the image
+
+    eprintln!("[debug] get_asset_metadata: step 4 (people) for {}", asset_id);
     let people = fetch_persons_for_asset(client, asset_id).await?;
+
+    eprintln!("[debug] get_asset_metadata: step 5 (location) for {}", asset_id);
+    let location = fetch_location_for_asset(client, asset_id).await?;
+
+    eprintln!("[debug] get_asset_metadata: step 6 (external_file) for {}", asset_id);
+    let external_file = fetch_external_file_info(client, asset_id).await?;
+
+    eprintln!("[debug] get_asset_metadata: all steps done for {}", asset_id);
 
     Ok(ImmichAssetMetadata {
         ocrs,
         tags,
         albums,
         people,
+        location,
+        external_file,
         previous_ai_description: String::new(),
     })
 }
@@ -218,6 +354,11 @@ pub async fn get_existing_description(
         Ok(Some(row)) => Ok(Some(row.get("description"))),
         Ok(None) => Ok(None),
         Err(e) => {
+            eprintln!(
+                "[debug] get_existing_description error — is_closed={} full={:?}",
+                e.is_closed(),
+                e
+            );
             eprintln!(
                 "{}",
                 rust_i18n::t!("database.error_checking_description", error = e.to_string())

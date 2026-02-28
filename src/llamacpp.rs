@@ -127,10 +127,10 @@ pub async fn analyze_image(
              out: &mut dyn Output|
              -> HelperResult {
                 let param = h.param(0).and_then(|v| Some(v.value())).ok_or_else(|| {
-                    handlebars::RenderError::new("toJSON: missing parameter")
+                    handlebars::RenderError::from(handlebars::RenderErrorReason::Other("toJSON: missing parameter".into()))
                 })?;
                 let json = serde_json::to_string(param)
-                    .map_err(|e| handlebars::RenderError::new(e.to_string()))?;
+                    .map_err(|e| handlebars::RenderError::from(handlebars::RenderErrorReason::Other(e.to_string())))?;
                 out.write(&json)?;
                 Ok(())
             },

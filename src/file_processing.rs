@@ -193,6 +193,12 @@ async fn process_file(
         .to_string();
     let asset_id = extract_uuid_from_preview_filename(&filename)?;
 
+    // Pre-flight connection check
+    match pg_client.simple_query("SELECT 1").await {
+        Ok(_) => eprintln!("[debug] connection alive before processing {}", asset_id),
+        Err(e) => eprintln!("[debug] connection DEAD before processing {}: {:?}", asset_id, e),
+    }
+
     let (user_description, previous_ai_description) = match get_existing_description(pg_client, asset_id).await? {
         Some(existing) => {
             if debug_prompt {
